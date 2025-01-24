@@ -1,5 +1,6 @@
 """
 Visualization of the feature distribution
+Author: giocrm@stanford.edu
 """
 import pathlib
 import shutil
@@ -8,15 +9,50 @@ import pandas as pd
 from configuration.config import config, aliases, dtypes
 import seaborn as sns
 import matplotlib.pyplot as plt
-from typing import Optional, Union, Dict, Tuple, List
+from typing import Any, Optional, Union, Dict, Tuple, List
 import numpy as np
+from sklearn.metrics import confusion_matrix
+from statsmodels.graphics.gofplots import qqplot
 import warnings
 warnings.simplefilter('ignore')
+
+
+def get_labels(df: pd.DataFrame,
+               col_name: str) -> Optional[dict[int, dict]]:
+    """
+    Using the ASQ dictionary code, get the numeric scoring of each of the labels so we can place them in the plot
+    :param df:
+    :param col_name:
+    :return:
+    """
+    # df = data_dict
+    # col_name = 'dem_0110'
+    categories = df.loc[df['Column Name'] == col_name, 'Numeric Scoring Code '].to_dict()
+    if len(categories) == 0:
+        return {col_name: ''}
+    categories = categories.get([*categories.keys()][0])
+    if not isinstance(categories, str):
+        return {col_name: ''}
+    # Split and process the categories into a nested dictionary
+    nested_dict = {}
+    try:
+        # Try parsing the categories
+        for pair in categories.split(', '):
+            code, description = pair.split('=')
+            nested_dict[int(code)] = description
+    except Exception as e:
+        # If parsing fails, set nested_dict to the original string
+        nested_dict = categories
+
+    return {col_name: nested_dict}
+
+
 
 def plot_distribution(df:pd.DataFrame,
                       column:str,
                       alias:str,
                       dtype:str,
+                      label_mapping: Optional[Dict[str, Dict]] = None,
                       output_path:Optional[pathlib.Path] = None,
                       figsize:Tuple[int,int] = (8,6),
                       visualize:bool = False,
@@ -62,6 +98,10 @@ def plot_distribution(df:pd.DataFrame,
     elif dtype in ['binary', 'categorical', 'ordinal']:
         # Bar plot for binary, categorical, or ordinal data
         value_counts = df[column].value_counts(normalize=True).reset_index()
+        # Apply label mapping if provided
+        if label_mapping and column in label_mapping:
+            value_counts[column] = value_counts[column].map(label_mapping[column])
+
         sns.barplot(data=value_counts,
                     x=column,
                     y="proportion",
@@ -69,10 +109,6 @@ def plot_distribution(df:pd.DataFrame,
         plt.title(f"{alias} ({dtype.capitalize()}) - Samples {proportion_sample_size}%", fontsize=14)
         plt.xlabel(alias)
         plt.ylabel("Proportion")
-
-        # # Add percentages on bars
-        # for index, row in value_counts.iterrows():
-        #     plt.text(index, row[column], f"{row[column]*100:.1f}%", ha='center', va='bottom')
 
     else:
         raise ValueError(f"Unsupported dtype: {dtype}")
@@ -93,6 +129,7 @@ def plot_distribution_with_hue(df: pd.DataFrame,
                                alias: str,
                                dtype: str,
                                hue: str = 'time',
+                               label_mapping: Optional[Dict[str, Dict]] = None,
                                figsize: Tuple[int, int] = (8, 6),
                                output_path: Optional[pathlib.Path] = None,
                                visualize:bool=False):
@@ -124,6 +161,10 @@ def plot_distribution_with_hue(df: pd.DataFrame,
         plt.legend(title=hue.capitalize())
 
     elif dtype in ['binary', 'categorical', 'ordinal']:
+        # Apply label mapping if provided
+        if label_mapping and column in label_mapping:
+            df_filtered[column] = df_filtered[column].map(label_mapping[column])
+
         # Bar plot with hue for categorical data
         sns.countplot(data=df_filtered, x=column, hue=hue, palette="pastel")
         plt.title(f"{alias} ({dtype.capitalize()}) - Comparison by {hue.capitalize()}", fontsize=14)
@@ -218,6 +259,7 @@ def plot_within_subject_and_distribution(df: pd.DataFrame,
                                          dtype: str,
                                          subject_id: str = 'subject_id',
                                          time_col: str = 'time',
+                                         label_mapping: Dict[str, Dict] = None,
                                          hue: str = 'time',
                                          figsize: Tuple[int, int] = (16, 6),
                                          output_path: Optional[pathlib.Path] = None,
@@ -273,6 +315,12 @@ def plot_within_subject_and_distribution(df: pd.DataFrame,
                   scale=1.5,
                   label='Mean ± SD',
                   ax=axes[0])
+    # Set custom labels if label_mapping is provided
+    if label_mapping and column in label_mapping:
+        tick_labels = [label_mapping[column].get(tick, tick) for tick in df_filtered[column].unique()]
+        axes[0].set_yticks(df_filtered[time_col].unique())
+        axes[0].set_yticklabels(tick_labels)
+
     axes[0].set_title(f"Within-Subject Comparison\n {alias}", fontsize=14)
     axes[0].set_xlabel("Time")
     axes[0].set_ylabel(alias)
@@ -327,6 +375,10 @@ def plot_within_subject_and_distribution(df: pd.DataFrame,
         axes[1].set_xlabel(alias)
         axes[1].set_ylabel("Count")
         axes[1].legend(title=hue.capitalize())
+        if label_mapping:
+            tick_labels = [label_mapping[column].get(tick, tick) for tick in df_filtered[column].unique()]
+            axes[1].set_xticks(df_filtered[time_col].unique())
+            axes[1].set_xticklabels(tick_labels)
 
     else:
         raise ValueError(f"Unsupported dtype: {dtype}")
@@ -343,9 +395,116 @@ def plot_within_subject_and_distribution(df: pd.DataFrame,
     plt.close()
 
 
+def plot_differences(df: pd.DataFrame,
+                     dtype:str,
+                     alias: str,
+                     column:str ,
+                     label_mapping: Optional[Dict[str, Dict]] = None,
+                     output_path: Optional[Union[str, pathlib.Path]] = None,
+                     pair_id: str = 'id_subject',
+                     show:bool=True):
+    """
+    Plot the differences distriubtion that is used in the input of the statsitical tests.
+    - For continuous variables: Histogram and QQ plot in the same figure.
+    - For categorical variables: Confusion matrix without color bar.
+    :param df: DataFrame containing the data.
+    :param dtypes: Dictionary mapping column names to their data types.
+    :param output_path: Directory where plots will be saved.
+    :param pair_id: Column used for pairing data.
+    """
+    if isinstance(output_path, str):
+        output_path = pathlib.Path(output_path)
+
+    print(f'Generating plots for: {column} - dtype: {dtype}')
+    paired_data = df[[column, pair_id]].copy().dropna()
+    paired_data = paired_data.groupby(pair_id).agg(list)
+
+    paired_data = paired_data[paired_data[column].apply(len) == 2]  # Ensure two observations per subject
+    values1 = np.array([pair[0] for pair in paired_data[column]])
+    values2 = np.array([pair[1] for pair in paired_data[column]])
+
+    if len(values1) == 0 or len(values2) == 0:
+        print(f"Skipping {column} due to lack of valid data.")
+        return
+
+    if output_path:
+        output_file = output_path.joinpath(f"{column} - {alias}.png",)
+
+    if dtype == 'continuous':
+        # Plot histogram and QQ plot
+        diff = values1 - values2
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+        # Histogram
+        sns.histplot(diff,
+                     stat="percent",
+                     kde=True,
+                     ax=axes[0])
+        axes[0].set_title(f'Difference Distribution \n{alias}\n N={len(diff)}')
+        axes[0].set_xlabel('Difference')
+        axes[0].set_ylabel('Percent [%]')
+        axes[0].grid(alpha=.7)
+
+        # QQ plot
+        qqplot(diff, line='s', ax=axes[1])
+        axes[1].set_title(f'QQ Plot\n{alias}')
+        axes[1].grid(alpha=.7)
+
+        plt.tight_layout()
+        if output_path:
+            plt.savefig(output_file, dpi=300)
+        if show:
+            plt.show()
+        plt.close()
+
+    elif dtype in ['binary', 'ordinal', 'categorical']:
+        # Apply label mapping if provided
+        if label_mapping and column in label_mapping:
+            tick_labels = [label_mapping[column].get(tick, tick) for tick in sorted(set(values1).union(set(values2)))]
+        else:
+            tick_labels = sorted(set(values1).union(set(values2)))  # Default to numeric labels
+
+        # Confusion matrix
+        cm = confusion_matrix(values1, values2)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(cm,
+                    annot=True,
+                    fmt='d',
+                    cmap='Blues',
+                    cbar=False,
+                    linewidths=0.5,
+                    linecolor='black',
+                    xticklabels=tick_labels,
+                    yticklabels=tick_labels,
+                    ax=ax)
+        ax.set_title(f'Comparison Responses First & Second Follow Up\n{alias}\nPairs {len(values1)}')
+        ax.set_xlabel(f'First Follow Up')
+        ax.set_ylabel('Second Follow Up')
+
+        plt.tight_layout()
+        if output_path:
+            plt.savefig(output_file, dpi=300)
+        if show:
+            plt.show()
+
+    else:
+        print(f"Skipping {column} due to unknown dtype: {dtype}.")
+
+
 if __name__ == "__main__":
     df_data = pd.read_csv(config.get('data_path').get('pp_dataset'))
     output_path_plots = config.get('results_path').joinpath('plots')
+    data_dict = pd.read_excel(config.get('data_path').get('asq_dictionary'))
+
+    #%% Dictionary with the formal numeric scoring of each ordinal/categorical variable
+    labels = {}
+    for alias, name_ in aliases.items():
+        if dtypes.get(alias) != 'continuous':
+            label = get_labels(df=data_dict, col_name=alias)
+            labels.update(label)
+
+    labels = {key: val for key, val in labels.items() if isinstance(val, dict)}
+
     # %% Select only the first time of sampling
     output_path_plots_baseline = output_path_plots.joinpath('baseline')
     if not output_path_plots_baseline.exists():
@@ -356,6 +515,7 @@ if __name__ == "__main__":
         # col_name = [*aliases.keys()][1]
         # alias_ = aliases.get(col_name)
         dtype = dtypes.get(col_name)
+        label_ = labels.get(col_name)
         print(f'Visualization: {col_name} ({alias_}) - {dtype}')
         plot_distribution(df=df_plot,
                           column=col_name,
@@ -380,7 +540,7 @@ if __name__ == "__main__":
                                    dtype=dtype,
                                    hue='time',
                                    output_path=output_path_plots_time_contrast,
-                                   visualize=False)
+                                   visualize=False,)
 
     # %% Within subject comparison
     output_path_plots_within_comparison = output_path_plots.joinpath('within_comparison')
@@ -403,6 +563,7 @@ if __name__ == "__main__":
         output_path_plots_within_and_hue.mkdir(exist_ok=True, parents=True)
     for col_name, alias_ in aliases.items():
         dtype = dtypes.get(col_name)
+        label_ = labels.get(col_name)
         print(f"Visualization: {col_name} ({alias_}) - {dtype}")
         plot_within_subject_and_distribution(df=df_data,
                                              column=col_name,
@@ -410,8 +571,25 @@ if __name__ == "__main__":
                                              subject_id='id_subject',
                                              hue='time',
                                              dtype=dtype,
+                                             label_mapping=label_,
                                              output_path=output_path_plots_within_and_hue,
                                              visualize=True)
 
+    # %% Differences and confusion matrices
+    output_path_differences = output_path_plots.joinpath('differences')
+    if not output_path_differences.exists():
+        output_path_differences.mkdir(exist_ok=True, parents=True)
+
+    for col_name, alias_ in aliases.items():
+        # col_name = [*aliases.keys()][1]
+        # alias_ = aliases.get(col_name)
+        dtype = dtypes.get(col_name)
+        plot_differences(df=df_data,
+                         column=col_name,
+                         alias=alias_,
+                         dtype=dtype,
+                         # output_path=output_path_differences,
+                         show=True,
+                         )
 
 

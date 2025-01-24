@@ -1,3 +1,25 @@
+"""
+Statistical Analysis Script for Within-Subject Comparisons
+
+Author: giocrm@stanford.edu
+
+Description:
+This script performs statistical analysis for within-subject comparisons of sleep-related variables.
+Key features include:
+- Implementation of paired statistical tests (e.g., Wilcoxon Signed-Rank, Paired t-test, McNemar).
+- Analysis of continuous, binary, ordinal, and categorical data types.
+- Calculation of effect sizes and p-value adjustments using the Benjamini-Hochberg procedure.
+- Visualization of data distributions and test results.
+- Structured to handle large datasets with customizable configurations.
+
+Dependencies:
+- NumPy, pandas, SciPy, StatsModels, Seaborn, Matplotlib, Tabulate, Graphviz, Pingouin.
+
+Usage:
+Configure paths and data types in `configuration.config` before running the script.
+
+"""
+
 from library.table_one import MakeTableOne
 import numpy as np
 import pandas as pd
@@ -9,123 +31,8 @@ from scipy.stats import chi2
 import seaborn as sns
 import matplotlib.pyplot as plt
 from typing import Optional, Union, Dict
-from tabulate import tabulate
-from graphviz import Digraph
 from statsmodels.stats.multitest import multipletests
-from collections import Counter
-
-
-# def apply_statistical_tests(df:pd.DataFrame,
-#                             dtypes:dict[str, str],
-#                             col_strata:str):
-#     """
-#     Perform within-subject comparison statistics
-#     :param df:
-#     :param dtypes:
-#     :return:
-#     """
-#     results = {}
-#     group_names = df[col_strata].unique()
-#     for col, dtype in dtypes.items():
-#         # col = 'ess_score'
-#         # dtype = dtypes.get(col)
-#         # Extract the subject pairs for the given column
-#         paired_data = df[[col, 'id_subject']].dropna()
-#         paired_data = paired_data.groupby('id_subject').agg(list)
-#
-#         # Ensure we have exactly two observations per subject
-#         paired_data = paired_data[paired_data[col].apply(len) == 2]
-#         # Remove rows where any value in the pair is negative
-#         paired_data = paired_data[paired_data[col].apply(lambda x: all(val >= 0 for val in x))]
-#
-#         # values1 = paired_data.loc[paired_data[col_strata] == group_names[0]]
-#         # values2 = paired_data.loc[paired_data[col_strata] == group_names[1]]
-#         values1 = [pair[0] for pair in paired_data[col]]
-#         values2 = [pair[1] for pair in paired_data[col]]
-#
-#         # df_values1 = pd.DataFrame(values1)
-#         # sns.histplot(df_values1, bins=30, kde=True)
-#         # plt.show()
-#         # unique_counts = {item: values1.count(item) for item in set(values1)}
-#
-#         n = len(values1)
-#         if dtype == 'continuous':
-#             stat, normality_p = stats.shapiro(np.array(values1) - np.array(values2))
-#             # if normality_p > 0.05 or stat < 0.5:
-#             if stat < 0.6:
-#                 stats_wilcoxon = stats.wilcoxon(x=values1,
-#                                            y=values2,
-#                                            zero_method="pratt",
-#                                            alternative="two-sided")
-#                 t_stat = stats_wilcoxon.statistic
-#                 p_val = stats_wilcoxon.pvalue
-#                 method = 'Wilcoxon'
-#             else:
-#                 # Paired t-test
-#                 t_stat, p_val = stats.ttest_rel(a=values1,
-#                                                 b=values2,
-#                                                 alternative='two-sided')
-#                 method = 'Paired t-test'
-#
-#         elif dtype == 'binary':
-#             table = pd.crosstab(np.array(values1), np.array(values2))
-#             b = table.iloc[0, 1]  # Discordant pair (Yes, No)
-#             c = table.iloc[1, 0]  # Discordant pair (No, Yes)
-#
-#             if (b + c) < 25:
-#                 result = mcnemar(table, exact=True)
-#             else:
-#                 result = mcnemar(table, exact=False)
-#             p_val = result.pvalue
-#             t_stat = None
-#             method = 'McNemar Test'
-#             effect_size = b / (b + c) if (b + c) > 0 else None  # Proportion of discordance
-#
-#         elif dtype == 'ordinal':
-#             # Wilcoxon signed-rank test for ordinal data, before-after or time_0 - time_1
-#             diff = list(set(values1) - set(values2))  # warning: compute the difference before to avoid errors in approx
-#             stats_wilcoxon = stats.wilcoxon(x=diff,
-#                                             # y=values2,
-#                                             zero_method='pratt',
-#                                             alternative='two-sided')
-#             t_stat = stats_wilcoxon.statistic
-#             p_val = stats_wilcoxon.pvalue
-#             method = 'Wilcoxon Signed-Rank Test'
-#
-#         elif dtype == 'categorical':
-#             # McNemar's test or Cochran’s Q test could be considered for categorical, but let's stick to McNemar for binary categories
-#             table = pd.crosstab(np.array(values1), np.array(values2))
-#
-#             if table.shape == (2, 2):  # Binary categorical data
-#                 result = mcnemar(table, exact=True)
-#                 p_val = result.pvalue
-#                 t_stat = None
-#                 method = 'McNemar Test'
-#             elif table.shape[1] > 2:
-#                 result = cochrans_q(table)
-#                 t_stat = result.statistic
-#                 p_val = result.pvalue
-#                 method = "Cochran's Q Test"
-#             else:
-#                 # If more than two categories, no direct method, we could expand this to include Cochran's Q test
-#                 p_val = None
-#                 t_stat = None
-#                 method = 'Unsupported Categorical Test'
-#         else:
-#             p_val = None
-#             t_stat = None
-#             method = 'Unknown'
-#
-#         results[col] = {
-#             'sample_size': n,
-#             'p_value': p_val,
-#             'effect_size': t_stat,
-#             'method': method,
-#             'dtype': dtype,
-#         }
-#
-#     return results
-#
+from statsmodels.stats.power import TTestIndPower, NormalIndPower
 
 
 def format_p_value(p,
@@ -347,7 +254,29 @@ def apply_statistical_tests(df: pd.DataFrame,
 
     return results
 
+def calculate_wilcoxon_sample_size(effect_size, alpha=0.05, power=0.8):
+    """
+    Calculate the required sample size for the Wilcoxon signed-rank test.
 
+    Parameters:
+    - effect_size (float): Expected effect size (r).
+    - alpha (float): Significance level (default is 0.05).
+    - power (float): Statistical power (default is 0.8).
+
+    Returns:
+    - sample_size (int): Required number of pairs.
+    """
+    # Initialize power analysis
+    analysis = NormalIndPower()
+
+    # Calculate the z-scores for alpha (two-sided) and power
+    z_alpha = np.abs(np.percentile(np.random.normal(size=100000), alpha / 2 * 100))
+    z_beta = np.abs(np.percentile(np.random.normal(size=100000), alpha * 100))
+
+    # Compute the required sample size (approximation based on normality assumption)
+    sample_size = analysis.solve_power(effect_size=effect_size, alpha=alpha, power=power, alternative='two-sided')
+
+    return int(np.ceil(sample_size))
 
 if __name__ == "__main__":
     df_data = pd.read_csv(config.get('data_path').get('pp_dataset'))
@@ -398,146 +327,130 @@ if __name__ == "__main__":
 
     df_results.to_excel(output_path_stats.joinpath('hypothesis_testing.xlsx'), index=False)
 
+    # %% Power calculation
+    sample_size = len(df_data)
+    # Assuming alpha = 0.05, effect size = 0.5 (medium), and a power of 0.8
+    effect_size = 0.5
+    alpha = 0.05
+    power = 0.8
+
+    # Initialize the power analysis
+    analysis = TTestIndPower()
+
+    # Calculate the required sample size
+    required_sample_size = analysis.solve_power(effect_size=effect_size,
+                                                alpha=alpha,
+                                                power=power,
+                                                alternative='two-sided')
+
+    # Compare the required sample size with the actual sample size
+    if sample_size >= required_sample_size:
+        print(f"Sample size is sufficient: {sample_size} participants (required: {int(required_sample_size)}).")
+    else:
+        print(f"Sample size is insufficient: {sample_size} participants (required: {int(required_sample_size)}).")
+
+    # Output justification
+    print(f"Sample size justification: With an assumed effect size of {effect_size}, alpha of {alpha}, "
+          f"and a power of {power}, the minimum required sample size is {int(required_sample_size)}.")
+
+    equired_sample_size = calculate_wilcoxon_sample_size(effect_size=0.5, alpha=0.05, power=0.8)
+    print(f"Required sample size for Wilcoxon signed-rank test: {required_sample_size} pairs")
+
     # %% manually do the statistics
-    from scipy.stats import skew
-    def wilcoxon_signed_rank_manual(x, y):
-        # Step 1: Calculate Differences
-        differences = np.array(x) - np.array(y)
-        print("Step 1: Differences (X - Y):", differences)
-
-        # Step 2: Exclude Zero Differences
-        non_zero_diff = differences[differences != 0]
-        print("Step 2: Non-zero Differences:", non_zero_diff)
-
-        # Step 3: Rank Absolute Differences
-        abs_diff = np.abs(non_zero_diff)
-        ranks = pd.Series(abs_diff).rank(method="average").values
-        print("Step 3: Ranks of Absolute Differences:", ranks)
-
-        # Step 4: Assign Signed Ranks
-        signed_ranks = np.sign(non_zero_diff) * ranks
-        print("Step 4: Signed Ranks:", signed_ranks)
-
-        # Step 5: Sum Positive and Negative Ranks
-        w_plus = signed_ranks[signed_ranks > 0].sum()
-        w_minus = signed_ranks[signed_ranks < 0].sum()
-        print("Step 5: W+ (Positive Rank Sum):", w_plus)
-        print("Step 5: W- (Negative Rank Sum):", w_minus)
-
-        # Step 6: Compute Test Statistic
-        w_statistic = min(w_plus, abs(w_minus))
-        print("Step 6: Test Statistic (W):", w_statistic)
-
-        # Visualize Each Step
-        plt.bar(range(len(non_zero_diff)), non_zero_diff, color="skyblue", label="Differences")
-        plt.axhline(0, color="gray", linestyle="--", label="Zero Line")
-        plt.xticks(range(len(non_zero_diff)), labels=[f"Pair {i + 1}" for i in range(len(non_zero_diff))])
-        plt.ylabel("Differences (X - Y)")
-        plt.title("Step 1: Differences Between Paired Values")
-        plt.legend()
-        plt.show()
-
-        return {
-            "differences": differences,
-            "non_zero_diff": non_zero_diff,
-            "ranks": ranks,
-            "signed_ranks": signed_ranks,
-            "w_plus": w_plus,
-            "w_minus": w_minus,
-            "test_statistic": w_statistic
-        }
-
-
-    col = 'isi_0300'
-    pair_id = 'id_subject'
-    paired_data = df_data[[col, pair_id]].dropna()
-    paired_data = paired_data.groupby(pair_id).agg(list)
-    # Ensure we have exactly two observations per subject
-    paired_data = paired_data[paired_data[col].apply(len) == 2]
-    # Extract paired values
-    values1 = [pair[0] for pair in paired_data[col]]
-    values2 = [pair[1] for pair in paired_data[col]]
-
-    # Calculate skewness
-    skewness = skew(values1)
-    print(f"Skewness: {skewness:.2f}")
-
-    np.mean(values1), np.median(values1)
-
-    np.mean(values2), np.median(values2)
-
-    wilcoxon_signed_rank_manual(x=values1,
-                                y=values2)
-
-    import pingouin as pg
-    diff = np.array(values1) - np.array(values2)
-    np.mean(diff), np.median(diff)  # close to zero so wilcoxon test is okay
-    pg.wilcoxon(diff, alternative='two-sided', correction=True)
-
-    stats_wilcoxon = stats.wilcoxon(x=diff,
-                                    # y=values2,
-                                    correction=True,
-                                    zero_method='wilcox',
-                                    alternative='two-sided',
-                                    method='approx')
-    stat = stats_wilcoxon.statistic
-    n = len(diff[diff != 0])  # Exclude zero differences (ties)
-    # Calculate expected value and variance under H0
-    E_T_plus = n * (n + 1) / 4
-    Var_T_plus = n * (n + 1) * (2 * n + 1) / 24
-    # Calculate Z-score
-    Z = (stat - E_T_plus) / np.sqrt(Var_T_plus)
-    # Calculate effect size r
-    r = Z / np.sqrt(n)
-
+    # from scipy.stats import skew
+    # def wilcoxon_signed_rank_manual(x, y):
+    #     # Step 1: Calculate Differences
+    #     differences = np.array(x) - np.array(y)
+    #     print("Step 1: Differences (X - Y):", differences)
+    #
+    #     # Step 2: Exclude Zero Differences
+    #     non_zero_diff = differences[differences != 0]
+    #     print("Step 2: Non-zero Differences:", non_zero_diff)
+    #
+    #     # Step 3: Rank Absolute Differences
+    #     abs_diff = np.abs(non_zero_diff)
+    #     ranks = pd.Series(abs_diff).rank(method="average").values
+    #     print("Step 3: Ranks of Absolute Differences:", ranks)
+    #
+    #     # Step 4: Assign Signed Ranks
+    #     signed_ranks = np.sign(non_zero_diff) * ranks
+    #     print("Step 4: Signed Ranks:", signed_ranks)
+    #
+    #     # Step 5: Sum Positive and Negative Ranks
+    #     w_plus = signed_ranks[signed_ranks > 0].sum()
+    #     w_minus = signed_ranks[signed_ranks < 0].sum()
+    #     print("Step 5: W+ (Positive Rank Sum):", w_plus)
+    #     print("Step 5: W- (Negative Rank Sum):", w_minus)
+    #
+    #     # Step 6: Compute Test Statistic
+    #     w_statistic = min(w_plus, abs(w_minus))
+    #     print("Step 6: Test Statistic (W):", w_statistic)
+    #
+    #     # Visualize Each Step
+    #     plt.bar(range(len(non_zero_diff)), non_zero_diff, color="skyblue", label="Differences")
+    #     plt.axhline(0, color="gray", linestyle="--", label="Zero Line")
+    #     plt.xticks(range(len(non_zero_diff)), labels=[f"Pair {i + 1}" for i in range(len(non_zero_diff))])
+    #     plt.ylabel("Differences (X - Y)")
+    #     plt.title("Step 1: Differences Between Paired Values")
+    #     plt.legend()
+    #     plt.show()
+    #
+    #     return {
+    #         "differences": differences,
+    #         "non_zero_diff": non_zero_diff,
+    #         "ranks": ranks,
+    #         "signed_ranks": signed_ranks,
+    #         "w_plus": w_plus,
+    #         "w_minus": w_minus,
+    #         "test_statistic": w_statistic
+    #     }
+    #
+    #
+    # col = 'isi_0300'
+    # pair_id = 'id_subject'
+    # paired_data = df_data[[col, pair_id]].dropna()
+    # paired_data = paired_data.groupby(pair_id).agg(list)
+    # # Ensure we have exactly two observations per subject
+    # paired_data = paired_data[paired_data[col].apply(len) == 2]
+    # # Extract paired values
+    # values1 = [pair[0] for pair in paired_data[col]]
+    # values2 = [pair[1] for pair in paired_data[col]]
+    #
+    # # Calculate skewness
+    # skewness = skew(values1)
+    # print(f"Skewness: {skewness:.2f}")
+    #
+    # np.mean(values1), np.median(values1)
+    #
+    # np.mean(values2), np.median(values2)
+    #
+    # wilcoxon_signed_rank_manual(x=values1,
+    #                             y=values2)
+    #
+    # import pingouin as pg
+    # diff = np.array(values1) - np.array(values2)
+    # np.mean(diff), np.median(diff)  # close to zero so wilcoxon test is okay
+    # pg.wilcoxon(diff, alternative='two-sided', correction=True)
+    #
+    # stats_wilcoxon = stats.wilcoxon(x=diff,
+    #                                 # y=values2,
+    #                                 correction=True,
+    #                                 zero_method='wilcox',
+    #                                 alternative='two-sided',
+    #                                 method='approx')
+    # stat = stats_wilcoxon.statistic
+    # n = len(diff[diff != 0])  # Exclude zero differences (ties)
+    # # Calculate expected value and variance under H0
+    # E_T_plus = n * (n + 1) / 4
+    # Var_T_plus = n * (n + 1) * (2 * n + 1) / 24
+    # # Calculate Z-score
+    # Z = (stat - E_T_plus) / np.sqrt(Var_T_plus)
+    # # Calculate effect size r
+    # r = Z / np.sqrt(n)
+    #
 
     # %% Time variables
     # Varibales contain NaNs sow we cannot use the full datase
     # use the fetures: sched_0900, sched_1000, sched_1900, sched_2000
 
-    # %% plot
-    data = {
-        "Spring-2014": 250,
-        "Spring-2015": 206,
-        "Spring-2016": 219,
-        "Spring-2017": 253,
-        "Spring-2018": 19,
-        "Spring-2020": 226,
-        "Spring-2021": 254,
-        "Spring-2022": 127,
-        "Winter-2014": 50,
-        "Winter-2015": 226,
-        "Winter-2016": 246,
-        "Winter-2017": 257,
-        "Winter-2018": 244,
-        "Winter-2019": 259,
-        "Winter-2020": 247,
-        "Winter-2021": 275,
-    }
-    # Extract data for plotting
-    quarters = list(data.keys())
-    counts = list(data.values())
-
-    # Plot settings
-    plt.figure(figsize=(10, 6))
-    plt.bar(quarters, counts, color='skyblue', edgecolor='black')
-
-    # Add labels and title
-    plt.xlabel("Quarter", fontsize=12)
-    plt.ylabel("Student Participation Count", fontsize=12)
-    plt.title("Student Participation by Quarter", fontsize=14)
-    plt.xticks(rotation=45, ha='right', fontsize=10)
-    plt.yticks(fontsize=10)
-
-    # Add grid lines for clarity
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-
-    # Adjust layout for a professional look
-    plt.tight_layout()
-
-    # Save the figure
-    # plt.savefig("student_participation_by_quarter.png", dpi=300)
-
-    # Display the plot
-    plt.show()
 

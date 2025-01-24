@@ -9,6 +9,7 @@ Operations:
 3. Select the columns of interest
 4. Process the time column into valid units for analysis
 
+Author: giocrm@stanford.edu
 """
 import pathlib
 

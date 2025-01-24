@@ -1,5 +1,5 @@
 """
-Create the students datasets.
+From the data/roster dataset, we will pre-process the dataset and create the students datasets.
 """
 import pandas as pd
 from pathlib import Path
