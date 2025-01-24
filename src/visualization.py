@@ -317,7 +317,7 @@ def plot_within_subject_and_distribution(df: pd.DataFrame,
                   ax=axes[0])
     # Set custom labels if label_mapping is provided
     if label_mapping and column in label_mapping:
-        tick_labels = [label_mapping[column].get(tick, tick) for tick in df_filtered[column].unique()]
+        tick_labels = [label_mapping.get(tick, tick) for tick in df_filtered[column].unique()]
         axes[0].set_yticks(df_filtered[time_col].unique())
         axes[0].set_yticklabels(tick_labels)
 
@@ -366,6 +366,8 @@ def plot_within_subject_and_distribution(df: pd.DataFrame,
                        title_fontsize=11)
 
     elif dtype in ['binary', 'categorical', 'ordinal']:
+        if label_mapping:
+            df_filtered[column] = df_filtered[column].replace(label_mapping)
         sns.countplot(data=df_filtered,
                       x=column,
                       hue=hue,
@@ -375,10 +377,6 @@ def plot_within_subject_and_distribution(df: pd.DataFrame,
         axes[1].set_xlabel(alias)
         axes[1].set_ylabel("Count")
         axes[1].legend(title=hue.capitalize())
-        if label_mapping:
-            tick_labels = [label_mapping[column].get(tick, tick) for tick in df_filtered[column].unique()]
-            axes[1].set_xticks(df_filtered[time_col].unique())
-            axes[1].set_xticklabels(tick_labels)
 
     else:
         raise ValueError(f"Unsupported dtype: {dtype}")
@@ -562,6 +560,8 @@ if __name__ == "__main__":
     if not output_path_plots_within_and_hue.exists():
         output_path_plots_within_and_hue.mkdir(exist_ok=True, parents=True)
     for col_name, alias_ in aliases.items():
+        # col_name = 'dem_0500'
+        # alias_ = aliases.get(col_name)
         dtype = dtypes.get(col_name)
         label_ = labels.get(col_name)
         print(f"Visualization: {col_name} ({alias_}) - {dtype}")
