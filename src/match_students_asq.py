@@ -60,7 +60,9 @@ def fuzzy_search_wrapper(df_students: pd.DataFrame,
         # we could use the start_time or completed or created_at
         df_asq_quarter = df_asq.loc[(df_asq.created_at >= calendar['Start Date']) &
                                     (df_asq.created_at <= calendar['End Date']), :]
-
+        # we use this to later manually check per quarter which ones were missing
+        df_asq_quarter = df_asq_quarter[['name', 'date_of_birth', 'survey_id', 'completed', 'created_at']]
+        df_asq_quarter.to_csv(config.get('results_path').joinpath(f'asq_{calendar.Term}_{year}.csv'), index=False)
         logging.info(
             f'Searching for {df_enrolled.shape[0]} students in {df_asq_quarter.shape[0]} ASQs for '
             f'the {calendar.Term} - {year} quarter term')
@@ -112,7 +114,7 @@ def compare_students_matched(df_students: pd.DataFrame,
 
     # Bar plot of the number of students per academic year comparing df_results and df_students
     plt.figure(figsize=figsize)
-    sns.countplot(data=df_combined, x='Academic year', hue='Dataset', palette='pastel')
+    sns.countplot(data=df_combined, x='Academic year', hue='Dataset', palette='Set2', alpha=0.9)
     plt.title(f'Number of Students per Academic Year (Comparison)\n'
               f'Students Unique Names: {df_students.name.nunique()}\n'
               f'Matches Unique Names: {unique_subjects.shape[0]}')
@@ -225,6 +227,14 @@ if __name__ == '__main__':
                 'scorer_count': score_counts
             }
 
+        # save the matches as separate frames
+        for scorer, frame_score in matches.items():
+            # scorer = 'UQR'
+            # frame_score = matches.get(scorer)
+            df_frame = frame_score.get('df_matches')
+            scorer_count = frame_score.get('scorer_count')
+            df_frame.to_csv(config.get('results_path').joinpath(f'matches_method_{scorer}.csv'), index=False)
+
         with open(config.get('results_path').joinpath('matches_scorer.pkl'), 'wb') as file:
             pickle.dump(matches, file)
 
@@ -246,6 +256,7 @@ if __name__ == '__main__':
     df_matches = df_matches.sort_values(by=['score', 'subject_name'],
                                         ascending=[False, True], inplace=False)
 
+
     # %% Filtering as many repetitions as possible
     # The best method that matches was the R method. No matter the score, if asq_name, subject_name, score, and
     # asq_survey_id are the same and only the method R is different. Preserve only the R match
@@ -264,7 +275,7 @@ if __name__ == '__main__':
 
     compare_students_matched(df_students=df_students,
                              df_match_res=df_results,
-                             figsize=(8, 6),
+                             figsize=(12, 6),
                              output_path=config.get('results_path').joinpath('BarPlotMatchAllScores.png'))
 
     df_results.to_excel(config.get('results_path').joinpath('matches_scorer_result.xlsx'), index=False)
@@ -299,10 +310,26 @@ if __name__ == '__main__':
 
     compare_students_matched(df_students=df_students,
                              df_match_res=df_results_pairs,
-                             figsize=(8, 6),
+                             figsize=(12, 6),
                              output_path=config.get('results_path').joinpath('BarPlotMatchPairUniques.png'))
 
     df_results_pairs.to_excel(config.get('results_path').joinpath('matches_scorer_pairs_manually_verified.xlsx'), index=False)
+
+    # mark the asq partitions per quarter which users had been found
+    asq_files = list(config.get('results_path').glob('asq_*.csv'))
+    df_results_pairs['quarter'] = df_results_pairs['quarter'].apply(lambda x: x.replace('-', ' '))
+    for asq_file in asq_files:
+        asq_quarter = pd.read_csv(asq_file)
+        asq_file_name = asq_file.name
+        parts = asq_file_name.split('_')  # ['asq', 'Spring', '2014.csv']
+        quarter = parts[1] + ' ' + parts[2].replace('.csv', '')  # 'Spring 2014'
+        df_results_pairs_quarter = df_results_pairs.loc[df_results_pairs['quarter'] == quarter]['asq_survey_id'].to_list()
+        asq_quarter['match'] = asq_quarter['survey_id'].isin(df_results_pairs_quarter).astype(int)
+        # Reorder columns to put 'match' first
+        cols = ['match'] + [col for col in asq_quarter.columns if col != 'match']
+        asq_quarter = asq_quarter[cols]
+        asq_quarter = asq_quarter.sort_values(by=['match', 'name', 'date_of_birth'], ascending=[False, True, False])
+        asq_quarter.to_csv(asq_file, index=False)
 
     # %%
     # unique_subject_dict = df_matches['subject_name'].value_counts().to_dict()
@@ -341,15 +368,16 @@ if __name__ == '__main__':
 
     # %% Visualize the collection
     # 1. Bar plot on how many unique subject_names we have in each quarter period
+    df_results = pd.read_excel(config.get('data_path').get('base').joinpath('matches_scorer_pairs_manually_verified.xlsx'))
     unique_subjects_per_quarter = df_results.groupby('quarter')['subject_name'].nunique()
-    df_students_avail = df_students.groupby('Academic year').size().reset_index(name='Count')
-
+    df_students_avail = df_students.groupby('Academic year').size()
+    df_students_avail = df_students_avail.reset_index(name='Count')
     # Plot the 'unique_subjects_per_quarter' data
     unique_subjects_per_quarter.sort_index(inplace=True)
 
     # Plot the 'df_students_avail' data
-    df_students_avail.set_index('Academic year', inplace=True)
-    df_students_avail = df_students_avail.reindex(index=unique_subjects_per_quarter.index)  # Align the indexes
+    # df_students_avail.set_index('Academic year', inplace=True)
+    # df_students_avail = df_students_avail.reindex(index=unique_subjects_per_quarter.index)  # Align the indexes
 
     df_students_avail['Dataset'] = 'Roster'
     unique_subjects_df = pd.DataFrame({

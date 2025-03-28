@@ -1,8 +1,15 @@
+"""
+Functions to implement within subject comparison in clinical studies
+
+Author: giocrm@stanford.edu
+Date: January 2024
+"""
+
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
 from statsmodels.stats.contingency_tables import mcnemar, cochrans_q
-from scipy.stats import chi2
+from scipy.stats import chi2, fisher_exact
 from typing import Optional, Union, Dict
 from statsmodels.stats.power import TTestIndPower, NormalIndPower
 from sklearn.utils import resample
@@ -34,6 +41,8 @@ def format_p_value(p,
         4.527726e-05	    0.00005
 
     """
+    if p is None:
+        return p
     if p < 10 ** (-decimal_places):
         return f"{p:.{sci_decimal_places}e}"  # Scientific notation
     return round(p, decimal_places)  # Regular rounding
@@ -103,7 +112,10 @@ def apply_statistical_tests(df: pd.DataFrame,
 
     results = {}
     for col, dtype in dtypes.items():
+        # col = 'mdhx_sleep_problem_1'
+        # dtype = dtypes.get(col)
         if not col in df.columns:
+            print(col)
             continue
         print(f'Hypothesis testing: {col} - dtype: {dtype}\n')
         # Extract the subject pairs for the given column
@@ -129,6 +141,7 @@ def apply_statistical_tests(df: pd.DataFrame,
         if n == 0:
             results[col] = {
                 'sample_size': n,
+                'discordant_pairs': None,
                 'statistic': None,
                 'p_value': None,
                 'effect_size': None,
@@ -136,6 +149,7 @@ def apply_statistical_tests(df: pd.DataFrame,
                 'dtype': dtype,
             }
             continue
+        discordant_pairs = None
 
         diff = np.round(np.array(values1) - np.array(values2), 3)
         # symmetry: np.mean(diff), np.median(diff) -> must be similar
@@ -159,18 +173,26 @@ def apply_statistical_tests(df: pd.DataFrame,
                 method = res.get('method')
 
         elif dtype == 'binary':
-            table = pd.crosstab(np.array(values1), np.array(values2))
-            b = table.iloc[0, 1]  # Discordant pair (Yes, No)
-            c = table.iloc[1, 0]  # Discordant pair (No, Yes)
 
-            if (b + c) < 25:
-                result = mcnemar(table, exact=True)
+            if len(np.unique(values1)) == 1 or len(np.unique(values2)) == 1:
+                p_val = None
+                t_stat = None
+                method = 'Less than 2 responses in a group'
+                effect_size = None
             else:
-                result = mcnemar(table, exact=False)
-            p_val = result.pvalue
-            t_stat = None
-            method = 'McNemar Test'
-            effect_size = b / (b + c) if (b + c) > 0 else None  # Proportion of discordance
+                table = pd.crosstab(np.array(values1), np.array(values2))
+                b = table.iloc[0, 1]  # Discordant pair (Yes, No)
+                c = table.iloc[1, 0]  # Discordant pair (No, Yes)
+                discordant_pairs = (b, c)
+                if (b + c) < 25:
+                    result = mcnemar(table, exact=True)
+                else:
+                    result = mcnemar(table, exact=False)
+                method = 'McNemar Test'
+                p_val = result.pvalue
+                t_stat = None
+                # effect_size = b / (b + c) if (b + c) > 0 else None  # Proportion of discordance
+                effect_size = b / c if c != 0 else "undefined or adjusted"  # odds ratio effect size
 
         elif dtype == 'ordinal':
             # Wilcoxon signed-rank test for ordinal data, before-after or time_0 - time_1
@@ -220,6 +242,7 @@ def apply_statistical_tests(df: pd.DataFrame,
 
         results[col] = {
             'sample_size': n,
+            'discordant_pairs': discordant_pairs,
             'p_value': p_val,
             'effect_size': effect_size,
             'statistic': t_stat,
@@ -297,7 +320,6 @@ def apply_statistical_tests_with_bootstrap(df: pd.DataFrame,
                 'p_value': p_val,
                 'method': method}
 
-
     def bootstrap_wilcoxon(diff_: np.ndarray,
                            n_bootstraps:int=2000) -> dict:
         """
@@ -305,7 +327,7 @@ def apply_statistical_tests_with_bootstrap(df: pd.DataFrame,
         :param diff_: Differences between paired values
         :return: Dictionary with Wilcoxon results and effect size
         """
-        original_effect_size = compute_wilcoxon(diff_).get('statistic')
+        original_result = compute_wilcoxon(diff_)
         boot_effect_sizes = []
         for _ in range(n_bootstraps):
             boot_diff = resample(diff_)
@@ -318,10 +340,11 @@ def apply_statistical_tests_with_bootstrap(df: pd.DataFrame,
         ci_lower = np.percentile(boot_effect_sizes, 2.5)
         ci_upper = np.percentile(boot_effect_sizes, 97.5)
         return {
-            'effect_size': original_effect_size,
+            'effect_size': original_result.get('effect_size'),
             'ci_lower': ci_lower,
             'ci_upper': ci_upper,
-            'method': 'Wilcoxon Signed-Rank Test'
+            'method': 'Wilcoxon Signed-Rank Test',
+            'p_value': original_result.get('p_value'),
         }
 
 
@@ -350,11 +373,103 @@ def apply_statistical_tests_with_bootstrap(df: pd.DataFrame,
             'ci_lower': np.percentile(boot_cohen_ds, 2.5),
             'ci_upper': np.percentile(boot_cohen_ds, 97.5),
             'method': 'Cohen d'
+        }
 
+    def compute_mcnemar(values1,
+                        values2) -> dict:
+        """
+        Compute McNemar test, odds ratio and its 95% confidence interval for binary paired data.
+        :param values1: First binary observation per pair.
+        :param values2: Second binary observation per pair.
+        :return: Dictionary with p_value, odds ratio, confidence intervals, and method.
+        """
+        # Check for sufficient variation in responses
+        if len(np.unique(values1)) == 1 or len(np.unique(values2)) == 1:
+            return {
+                'p_value': np.nan,
+                'effect_size': np.nan,
+                'ci_lower': np.nan,
+                'ci_upper': np.nan,
+                'method': 'Less than 2 responses in a group'
+            }
+
+        table = pd.crosstab(np.array(values1), np.array(values2))
+        try:
+            b = table.iloc[0, 1]  # discordant pair (0, 1)
+            c = table.iloc[1, 0]  # discordant pair (1, 0)
+        except Exception:
+            return {
+                'p_value': np.nan,
+                'effect_size': np.nan,
+                'ci_lower': np.nan,
+                'ci_upper': np.nan,
+                'method': 'Table structure error'
+            }
+        discordant = b + c
+        if discordant < 25:
+            result = mcnemar(table, exact=True)
+        else:
+            result = mcnemar(table, exact=False)
+        p_val = result.pvalue
+
+        # Calculate odds ratio and its 95% CI using the log-transformation.
+        # Apply a continuity correction of 0.5 if b or c is zero.
+        if b == 0 or c == 0:
+            OR = (b + 0.5) / (c + 0.5)
+            se_log_OR = np.sqrt(1 / (b + 0.5) + 1 / (c + 0.5))
+        else:
+            OR = b / c
+            se_log_OR = np.sqrt(1 / b + 1 / c)
+        log_OR = np.log(OR)
+        ci_lower = np.exp(log_OR - 1.96 * se_log_OR)
+        ci_upper = np.exp(log_OR + 1.96 * se_log_OR)
+        return {
+            'p_value': p_val,
+            'effect_size': OR,
+            'ci_lower': ci_lower,
+            'ci_upper': ci_upper,
+            'method': 'McNemar Test'
+        }
+
+    def bootstrap_mcnemar(values1: list, values2: list, n_bootstraps: int = 2000) -> dict:
+        """
+        Bootstrap the odds ratio for the McNemar test and compute 95% confidence intervals.
+
+        :param values1: List of first binary observations (per pair).
+        :param values2: List of second binary observations (per pair).
+        :param n_bootstraps: Number of bootstrap iterations.
+        :return: Dictionary with original odds ratio, lower and upper confidence limits, and method.
+        """
+        original_result = compute_mcnemar(values1, values2)
+        original_OR = original_result.get('effect_size')
+        boot_ORs = []
+        # Combine the paired observations for resampling.
+        pairs = list(zip(values1, values2))
+        for _ in range(n_bootstraps):
+            boot_pairs = resample(pairs)
+            boot_values1 = [p[0] for p in boot_pairs]
+            boot_values2 = [p[1] for p in boot_pairs]
+            boot_result = compute_mcnemar(boot_values1, boot_values2)
+            if boot_result.get('effect_size') == boot_result.get('effect_size'):
+                boot_ORs.append(boot_result.get('effect_size'))
+        if len(boot_ORs) == 0:
+            ci_lower, ci_upper = np.nan, np.nan
+        else:
+            ci_lower = np.percentile(boot_ORs, 2.5)
+            ci_upper = np.percentile(boot_ORs, 97.5)
+
+        return {
+            'effect_size': original_OR,
+            'ci_lower': ci_lower,
+            'ci_upper': ci_upper,
+            'method': 'McNemar',
+            'p_value': original_result.get('p_value'),
         }
 
     results = {}
     for col, dtype in tqdm(dtypes.items(), desc="Processing Columns With Bootstrap"):
+        # col = 'mdhx_sleep_diagnosis_5'
+        # dtype = dtypes.get(col)
         if not col in df.columns:
             continue
         print(f'Hypothesis testing: {col} - dtype: {dtype}: Bootstrap {n_bootstraps}\n')
@@ -370,12 +485,12 @@ def apply_statistical_tests_with_bootstrap(df: pd.DataFrame,
         if n == 0:
             results[col] = {
                 'sample_size': n,
-                'statistic': None,
-                'p_value': None,
-                'effect_size': None,
-                'cohen_d': None,
-                'ci_lower': None,
-                'ci_upper': None,
+                'statistic': np.nan,
+                'p_value': np.nan,
+                'effect_size': np.nan,
+                'cohen_d': np.nan,
+                'ci_lower': np.nan,
+                'ci_upper': np.nan,
                 'method': 'No valid pairs',
                 'dtype': dtype,
             }
@@ -383,33 +498,41 @@ def apply_statistical_tests_with_bootstrap(df: pd.DataFrame,
 
         diff = np.round(np.array(values1) - np.array(values2), 3)
 
-        # compte the wilcoxon rank test
-        res = compute_wilcoxon(diff)
-        wilcoxon_effect_size = res.get('effect_size')
-        t_stat = res.get('statistic')
-        p_val = res.get('p_value')
-
+        # When the dtype is binary, use McNemar test with odds ratio and CIs
+        if dtype == 'binary':
+            # Original McNemar test result
+            bin_result = compute_mcnemar(values1, values2)
+            # Bootstrap the odds ratio for the McNemar test
+            bootstrap_result = bootstrap_mcnemar(values1=values1,
+                                                 values2=values2,
+                                                     n_bootstraps=n_bootstraps)
+            bootstrap_result['statistic'] = np.nan
+            bootstrap_result['p_value'] = bin_result.get('p_value')
         # Compute bootstrap Cohen's d
-        if method == 'cohen':
-            bootstrap_results = bootstrap_cohen_d(diff=diff,
+        elif method == 'cohen':
+            bootstrap_result = bootstrap_cohen_d(diff=diff,
                                                   n_bootstraps=n_bootstraps)
+            bootstrap_result['p_value'] = np.nan
+            # compte the wilcoxon rank test
+            res = compute_wilcoxon(diff)
+            bootstrap_result['statistic'] = res.get('statistic')
+
         else:
-            bootstrap_results = bootstrap_wilcoxon(diff_=diff,
+            bootstrap_result = bootstrap_wilcoxon(diff_=diff,
                                                    n_bootstraps=n_bootstraps)
-        effect_size = bootstrap_results.get('effect_size')
-        ci_lower = bootstrap_results.get('ci_lower')
-        ci_upper = bootstrap_results.get('ci_upper')
-        boot_method =  bootstrap_results.get('method')
+            # compte the wilcoxon rank test
+            res = compute_wilcoxon(diff)
+            bootstrap_result['statistic'] = res.get('statistic')
 
         results[col] = {
             'sample_size': n,
-            'p_value': p_val,
-            'wilcoxon_effect_size': wilcoxon_effect_size,
-            'boot_effect_size': effect_size,
-            'boot_method': boot_method,
-            'ci_lower': np.round(ci_lower, 4),
-            'ci_upper': np.round(ci_upper, 4),
-            'statistic': t_stat,
+            'p_value': bootstrap_result.get('p_value'),
+            # 'effect_size': bootstrap_result.get('effect_size'),
+            'boot_effect_size': bootstrap_result.get('effect_size'),
+            'boot_method': bootstrap_result.get('method'),
+            'ci_lower':bootstrap_result.get('ci_lower'),
+            'ci_upper': bootstrap_result.get('ci_upper'),
+            'statistic': bootstrap_result.get('statistic'),
             'dtype': dtype,
         }
 

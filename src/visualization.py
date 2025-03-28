@@ -521,6 +521,49 @@ if __name__ == "__main__":
                           dtype=dtype,
                           output_path=output_path_plots_baseline,
                           visualize=False)
+    # %% Bar plot on how many unique subject_names we have in each quarter period
+    df_students = pd.read_csv(config.get('data_path').get('dataset_students'))
+    df_students['ID'] = df_students['ID'].astype(int)
+    df_students['Academic year'] = df_students['quarter'] + ' ' + df_students['year'].astype(str)
+    df_students.sort_values(by='year', inplace=True)
+    df_students = df_students[['Academic year']]
+    df_students['Academic year'] = df_students['Academic year'].apply(lambda x: x.replace(' ', '-'))
+    df_students['dataset'] = 'Roster'
+
+    df_unique = df_data.groupby('id_subject', as_index=False).first()[['quarter']]
+    df_unique.rename(columns={'quarter': 'Academic year'}, inplace=True)
+    df_unique['dataset'] = 'ASQ match'
+
+    df_combined = pd.concat([df_students, df_unique])
+    df_counts = df_combined.groupby(['Academic year', 'dataset']).size().reset_index(name='Count')
+    # Split into season and year
+    df_counts[['season', 'year']] = df_counts['Academic year'].str.split('-', expand=True)
+    season_order = {'Winter': 1, 'Spring': 2, 'Summer': 3, 'Fall': 4}
+    # Map season to numeric order
+    df_counts['season_order'] = df_counts['season'].map(season_order)
+    df_counts['year'] = df_counts['year'].astype(int)
+    # Create a sorting column
+    df_counts['sort_index'] = df_counts['year'] * 10 + df_counts['season_order']
+    df_counts = df_counts.sort_values(by='sort_index')
+    # Set Academic year as a categorical variable in correct order
+    df_counts['Academic year'] = pd.Categorical(df_counts['Academic year'],
+                                                categories=df_counts['Academic year'].unique(),
+                                                ordered=True)
+    plt.figure(figsize=(14, 6))
+    sns.barplot(data=df_counts,
+                x='Academic year',
+                y='Count',
+                hue='dataset',
+                palette='Set2',
+                alpha=0.9)
+    plt.title('Unique Subjects per Quarter (Roster vs Matched ASQ)', fontsize=16)
+    plt.xlabel('Quarter', fontsize=14)
+    plt.ylabel('Number of Unique Subjects', fontsize=14)
+    plt.xticks(rotation=45, fontsize=12)
+    plt.legend(fontsize=12, title='Dataset')
+    plt.tight_layout()
+    plt.grid(axis='y', alpha=0.7)
+    plt.show()
 
     # %% Visualize both time samplings
     # Call the function

@@ -20,21 +20,10 @@ Configure paths and data types in `configuration.config` before running the scri
 
 """
 
-from library.table_one import MakeTableOne
-import numpy as np
 import pandas as pd
 from configuration.config import config, aliases, dtypes
-from library.table_one import MakeTableOne
-import scipy.stats as stats
-from statsmodels.stats.contingency_tables import mcnemar, cochrans_q
-from scipy.stats import chi2
-import seaborn as sns
-import matplotlib.pyplot as plt
-from typing import Optional, Union, Dict
 from statsmodels.stats.multitest import multipletests
-from statsmodels.stats.power import TTestIndPower, NormalIndPower
-from sklearn.utils import resample
-from tqdm import tqdm
+from statsmodels.stats.power import TTestIndPower
 from library.within_tests import format_p_value, apply_statistical_tests_with_bootstrap, apply_statistical_tests, calculate_wilcoxon_sample_size
 
 
@@ -64,6 +53,7 @@ if __name__ == "__main__":
     df_data.groupby(by='time')['sched_total_sleep_time_week'].mean()/60
     df_data.groupby(by='time')['sched_total_sleep_time_week'].std()/60
 
+    # %% include more feature for the statsitical analysis
 
     # %% Within subject comparison.
     # We want to compare how the results of the same subject changed after taking the class. We will not compare
@@ -76,14 +66,19 @@ if __name__ == "__main__":
     # df_results = df_results.loc[~df_results['variable'].isin(['dem_0110', 'dem_0500']), :]
     df_results['variable'] = df_results.variable.map(aliases)
 
+    df_results['p_value_adjusted'] = None
+    valid_pval_idx = df_results.loc[~df_results['p_value'].isna()].index
     # Apply the Benjamini-Hochberg procedure to adjust the p-values
-    df_results['p_value_adjusted'] = multipletests(df_results['p_value'], method='fdr_bh')[1]
-    df_results['effect_size'] = df_results['effect_size'].round(4)
+    df_results.loc[valid_pval_idx, 'p_value_adjusted'] = multipletests(df_results.loc[valid_pval_idx, 'p_value'],
+                                                   method='fdr_bh')[1]
+
+    df_results['effect_size'] = df_results['effect_size'].apply(lambda x: round(x, 4) if x is not None else x)
 
     # format the p values
     df_results['p_value_formatted'] = df_results.p_value.apply(format_p_value)
     df_results['p_value_adjusted_formatted'] = df_results.p_value_adjusted.apply(format_p_value)
 
+    df_results['p_value_adjusted_formatted'] = pd.to_numeric(df_results['p_value_adjusted_formatted'], errors='coerce')
     df_results.sort_values(by='p_value_adjusted_formatted', ascending=True, inplace=True)
 
     df_results.to_excel(output_path_stats.joinpath('hypothesis_testing.xlsx'), index=False)
@@ -92,13 +87,18 @@ if __name__ == "__main__":
     boot_res = apply_statistical_tests_with_bootstrap(df=df_data,
                                                       dtypes=dtypes,
                                                       pair_id='id_subject',
-                                                      n_bootstraps=2000
+                                                      n_bootstraps=20,  # 00
+                                                      method='wilcoxon'
                                                       )
     df_boot_res = pd.DataFrame(boot_res).T
     df_boot_res.reset_index(inplace=True, drop=False, names='variable')
     df_boot_res['variable'] = df_boot_res.variable.map(aliases)
-    df_boot_res['p_value_adjusted'] = multipletests(df_boot_res['p_value'], method='fdr_bh')[1]
-    for col_round in ['boot_effect_size', 'wilcoxon_effect_size', 'ci_upper', 'ci_lower']:
+
+    valid_pval_idx = df_boot_res.loc[~df_boot_res['p_value'].isna()].index
+    df_boot_res.loc[valid_pval_idx, 'p_value_adjusted'] = multipletests(df_boot_res.loc[valid_pval_idx, 'p_value'],
+                                                   method='fdr_bh')[1]
+
+    for col_round in ['boot_effect_size', 'ci_upper', 'ci_lower']:
         df_boot_res[col_round] = df_boot_res[col_round].astype(float)
         df_boot_res[col_round] = df_boot_res[col_round].round(3)
 
@@ -144,6 +144,127 @@ if __name__ == "__main__":
 
     equired_sample_size = calculate_wilcoxon_sample_size(effect_size=0.5, alpha=0.05, power=0.8)
     print(f"Required sample size for Wilcoxon signed-rank test: {required_sample_size} pairs")
+
+     # %% how the baseline changes over 6 years as sleep has become more important to the public
+    df_baseline = df_data.drop_duplicates(subset='id_subject', keep='first')
+
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    import seaborn as sns
+
+    def plot_continuous_over_time(df, dtypes):
+        # Ensure datetime
+        df = df.copy()
+        df['completed'] = pd.to_datetime(df['completed'])
+
+        # Filter only continuous variables
+        continuous_vars = [col for col, typ in dtypes.items() if typ == 'continuous']
+        available_vars = [col for col in continuous_vars if col in df.columns]
+
+        if not available_vars:
+            raise ValueError("No continuous variables found in DataFrame.")
+
+        # Sort df for proper plotting
+        df = df.sort_values(by='completed')
+
+        # Create figure with one subplot per variable
+        fig, axes = plt.subplots(len(available_vars), 1, figsize=(12, 4 * len(available_vars)), sharex=True)
+
+        if len(available_vars) == 1:
+            axes = [axes]
+
+        for ax, var in zip(axes, available_vars):
+            for subject_id, group in df.groupby('id_subject'):
+                if var in group:
+                    ax.plot(group['completed'], group[var], marker='o', label=f"ID {subject_id}", alpha=0.6)
+
+            ax.set_ylabel(var)
+            ax.set_title(f'Time Trend for {var}')
+            ax.grid(True)
+
+        # Add vertical lines at quarter transitions
+        quarter_boundaries = (
+            df.sort_values('completed')
+            .drop_duplicates(subset='quarter', keep='last')
+            .sort_values('completed')
+        )
+
+        for ax in axes:
+            for _, row in quarter_boundaries.iterrows():
+                ax.axvline(row['completed'], color='gray', linestyle='--', alpha=0.6)
+                ax.text(row['completed'], ax.get_ylim()[1], row['quarter'], rotation=90,
+                        verticalalignment='bottom', fontsize=8, color='gray')
+
+        # Improve x-axis formatting
+        axes[-1].xaxis.set_major_locator(mdates.YearLocator())
+        axes[-1].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.show()
+
+
+    plot_continuous_over_time(df_baseline, dtypes)
+
+    df_baseline
+
+
+    sns.boxplot(x='quarter', y='isi_score', data=df_baseline)
+    plt.show()
+
+
+    def plot_continuous_boxplots_over_time(df, dtypes):
+        df = df.copy()
+
+        # Ensure 'completed' is datetime
+        df['completed'] = pd.to_datetime(df['completed'])
+
+        # Filter continuous variables that are present in the DataFrame
+        continuous_vars = [col for col, typ in dtypes.items() if typ == 'continuous']
+        available_vars = [col for col in continuous_vars if col in df.columns]
+
+        if not available_vars:
+            raise ValueError("No continuous variables found in the DataFrame.")
+
+        # Order quarters by median date
+        quarter_order = (
+            df.groupby('quarter')['completed']
+            .median()
+            .sort_values()
+            .index
+            .tolist()
+        )
+
+        # Generate a color palette with enough distinct colors
+        unique_quarters = len(quarter_order)
+        palette = sns.color_palette("husl", unique_quarters)  # "husl" handles large categories well
+        color_mapping = dict(zip(quarter_order, palette))
+
+        # Plot
+        n_vars = len(available_vars)
+        fig, axes = plt.subplots(n_vars, 1, figsize=(14, 5 * n_vars), sharex=False)
+
+        if n_vars == 1:
+            axes = [axes]
+
+        for ax, var in zip(axes, available_vars):
+            sns.boxplot(
+                data=df,
+                x='quarter',
+                y=var,
+                order=quarter_order,
+                palette=color_mapping,
+                ax=ax
+            )
+            ax.set_title(f"Boxplot of {var} over Quarters", fontsize=14)
+            ax.set_xlabel("Quarter")
+            ax.set_ylabel(var)
+            ax.tick_params(axis='x', rotation=45)
+            ax.grid(True)
+
+        plt.tight_layout()
+        plt.show()
+    plot_continuous_boxplots_over_time(df_baseline, dtypes)
 
     # %% manually do the statistics
     # from scipy.stats import skew
